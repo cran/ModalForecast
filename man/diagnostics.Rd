@@ -3,7 +3,7 @@
 \name{diagnostics}
 \alias{diagnostics}
 \alias{diagnostics.modal_arima}
-\title{Diagnostic Plots for Modal ARIMA Models}
+\title{Diagnostic Plots for Modal ARIMA and SARIMA Models}
 \usage{
 diagnostics(object, ...)
 
@@ -18,38 +18,19 @@ diagnostics(object, ...)
 A list of ggplot objects (invisibly) and draws the panel.
 }
 \description{
-Provides visual and statistical diagnostics for the residuals of a fitted modal ARIMA model.
-Produces a comprehensive diagnostic panel including time series plot with
-fitted modes, ACF/PACF of residuals, QQ-plot for normality, histogram of
-residuals, and Ljung-Box p-values, all implemented using ggplot2.
+Provides visual and statistical diagnostics for the residuals of a fitted
+Modal (S)ARIMA model. Produces a panel with the differenced series and
+fitted modes, the ACF and PACF of the randomized quantile residuals (RQR),
+a normal QQ-plot, a histogram and Ljung-Box p-values. For seasonal models
+the ACF, PACF and Ljung-Box statistics cover at least two seasonal periods.
 }
 \examples{
-library(forecast)
+# Non-seasonal
+fit <- fit_modal_arima(log10(lynx), order = c(2, 0, 0))
+diagnostics(fit)
 
-# 1. Load Empirical Data (Lynx)
-data(lynx)
-y <- log10(lynx)
-
-# 2. Find the best SKD Error Distribution (Normal vs T vs Laplace) 
-fit_n <- fit_modal_arima(y, order = c(2, 0, 0), dist = "normal")
-fit_t <- fit_modal_arima(y, order = c(2, 0, 0), dist = "t")
-fit_l <- fit_modal_arima(y, order = c(2, 0, 0), dist = "laplace")
-c(Normal = AIC(fit_n), Student = AIC(fit_t), Laplace = AIC(fit_l))
-
-# 3. Auto Model Selection globally on the winning distribution (Skew-Normal)
-fit_auto <- auto.modal.arima(y, d=0, max.p=2, max.q=2, dist="normal")
-
-# 4. Summary & Inferences
-summary(fit_auto)
-
-# 5. Run residual diagnostics and Envelopes
-diagnostics(fit_auto)
-envelope(fit_auto, B=10)
-
-# 6. Produce forecasts with multiple prediction bands (alphas)
-pred <- forecast(fit_auto, h=5, level = c(80, 95))
-
-# 7. Native integration with 'forecast' ecosystem
-autoplot(pred)    
-accuracy(pred)
+# Seasonal airline model
+fit_air <- fit_modal_arima(log(AirPassengers), order = c(0, 1, 1),
+                           seasonal = list(order = c(0, 1, 1), period = 12))
+diagnostics(fit_air)
 }

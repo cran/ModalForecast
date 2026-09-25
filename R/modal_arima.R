@@ -1,22 +1,50 @@
-#' Fit a Parametric Modal ARIMA Model using the SKD Family
+#' Fit a Parametric Modal ARIMA or Seasonal ARIMA Model using the SKD Family
 #'
-#' Fits a Modal ARIMA model where the conditional mode follows an ARIMA recursion
-#' and the innovations follow a member of the SKD (Skewed Distribution) family.
-#' Supports the Skew-Normal, Skewed Student-t, and Skewed Laplace distributions.
+#' Fits a Modal ARIMA or Modal SARIMA model, where the conditional mode follows
+#' an (optionally seasonal) ARIMA recursion and the innovations follow a member
+#' of the SKD (Skewed Distribution) family: Skew-Normal, Skewed Student-t or
+#' Skewed Laplace.
+#'
+#' @details
+#' Let \eqn{w_t = (1-B)^d (1-B^s)^D y_t}. The model is
+#' \deqn{\phi(B)\Phi(B^s) w_t = c + \theta(B)\Theta(B^s)\epsilon_t,}
+#' where \eqn{\epsilon_t} are independent \eqn{SKD(0, \sigma, \gamma)} errors
+#' with mode zero, so that \eqn{\mu_t = w_t - \epsilon_t} is the conditional
+#' mode of \eqn{w_t}. The non-seasonal Modal ARIMA model is the special case
+#' \eqn{P = D = Q = 0}.
+#'
+#' All members share the parameterization of Galarza et al. (2017),
+#' \deqn{f(y \mid \mu, \sigma, \gamma) = \frac{4p(1-p)}{\sigma} g\{2\rho_p((y-\mu)/\sigma)\},}
+#' with \eqn{p = 1/(1+\gamma^2)} and \eqn{\rho_p(u) = u(p - I(u<0))}, where
+#' \eqn{g} is the standard normal, Student-t or Laplace density. The mode
+#' \eqn{\mu} is also the \eqn{p}-th quantile, and \eqn{\gamma > 1} gives a
+#' heavier right tail.
+#'
+#' Parameters are estimated by maximum likelihood with BFGS and analytical
+#' gradients, started from a conditional-sum-of-squares Gaussian (S)ARIMA fit.
+#' The Skewed Laplace log-likelihood is not differentiable when a residual is
+#' zero, so for \code{dist = "laplace"} the BFGS solution is refined with
+#' Nelder-Mead. Stationarity and invertibility of the regular and seasonal
+#' polynomials are enforced during optimization.
 #'
 #' @references
 #' Galarza, C. E., Lachos, V. H., Cabral, C. R. B., and Castro, L. M. (2017).
 #' Robust quantile regression using a generalized class of skewed distributions.
 #' Stat, 6(1), 113-130.
 #'
-#' @seealso \code{\link{auto.modal.arima}}
+#' @seealso \code{\link{auto.modal.arima}}, \code{\link{forecast.modal_arima}}
 #'
 #' @note GitHub repository: \url{https://github.com/chedgala/ModalForecast}
 #'
 #' @param y numeric vector or time series of observations.
-#' @param order A specification of the non-seasonal part of the ARIMA
-#'   model: the three components (p, d, q) are the AR order, the
-#'   degree of differencing, and the MA order.
+#' @param order A specification of the non-seasonal part of the model: the
+#'   three components (p, d, q) are the AR order, the degree of differencing,
+#'   and the MA order.
+#' @param seasonal A specification of the seasonal part of the model, as in
+#'   \code{\link[stats]{arima}}: a list with components \code{order}
+#'   (the seasonal orders (P, D, Q)) and \code{period} (the seasonal period
+#'   \eqn{s}; defaults to \code{frequency(y)}). A numeric vector of length 3 is
+#'   taken as the seasonal order. The default is a non-seasonal model.
 #' @param dist Character string specifying the error distribution from the
 #'   SKD family. One of \code{"normal"} (default) for the Skew-Normal,
 #'   \code{"t"} for the Skewed Student-t (adds degrees-of-freedom parameter
@@ -25,406 +53,149 @@
 #' @return An object of class \code{modal_arima} containing:
 #'   \describe{
 #'     \item{\code{y}}{The original time series.}
-#'     \item{\code{order}}{The ARIMA order \code{(p,d,q)}.}
+#'     \item{\code{order}}{The non-seasonal order \code{(p,d,q)}.}
+#'     \item{\code{seasonal}}{List with the seasonal \code{order} \code{(P,D,Q)} and \code{period}.}
 #'     \item{\code{coefficients}}{Named vector of estimated parameters.}
+#'     \item{\code{vcov}}{Asymptotic covariance matrix of the coefficients, from the observed information (delta method for \code{sigma}, \code{gamma} and \code{nu}).}
 #'     \item{\code{loglik}}{The maximized log-likelihood.}
-#'     \item{\code{hessian}}{The Hessian matrix at the optimum.}
+#'     \item{\code{nobs}}{Number of observations used in the likelihood, \eqn{T - d - Ds}.}
+#'     \item{\code{hessian}}{The observed information on the optimization scale: the Hessian of the negative log-likelihood, or the outer product of the per-observation scores (OPG) for the Skewed Laplace, whose log-likelihood is not twice differentiable, and whenever the Hessian is not positive definite.}
+#'     \item{\code{information}}{Which estimator was used for \code{hessian}: \code{"hessian"} or \code{"opg"}.}
 #'     \item{\code{convergence}}{Convergence code from \code{optim}.}
 #'     \item{\code{dist}}{The distribution used (\code{"normal"}, \code{"t"}, or \code{"laplace"}).}
+#'     \item{\code{fitted.values}, \code{residuals}}{Fitted modes and modal residuals on the scale of \code{y} (\code{NA} for the first \eqn{d + Ds} observations).}
 #'   }
-#' @importFrom stats arima optim qnorm runif dnorm pnorm coef AIC BIC logLik printCoefmat
+#' @importFrom stats arima optim optimHess qnorm runif dnorm pnorm coef AIC BIC logLik printCoefmat
 #' @importFrom graphics plot
 #' @export
 #'
 #' @examples
 #' library(forecast)
-#' 
-#' # 1. Load Empirical Data (Lynx)
-#' data(lynx)
-#' y <- log10(lynx)
 #'
-#' # 2. Find the best SKD Error Distribution (Normal vs T vs Laplace) 
+#' # Non-seasonal: Lynx data
+#' y <- log10(lynx)
 #' fit_n <- fit_modal_arima(y, order = c(2, 0, 0), dist = "normal")
 #' fit_t <- fit_modal_arima(y, order = c(2, 0, 0), dist = "t")
 #' fit_l <- fit_modal_arima(y, order = c(2, 0, 0), dist = "laplace")
 #' c(Normal = AIC(fit_n), Student = AIC(fit_t), Laplace = AIC(fit_l))
+#' summary(fit_n)
 #'
-#' # 3. Auto Model Selection globally on the winning distribution (Skew-Normal)
-#' fit_auto <- auto.modal.arima(y, d=0, max.p=2, max.q=2, dist="normal")
-#'
-#' # 4. Summary & Inferences
-#' summary(fit_auto)
-#'
-#' # 5. Run residual diagnostics and Envelopes
-#' diagnostics(fit_auto)
-#' envelope(fit_auto, B=10)
-#'
-#' # 6. Produce forecasts with multiple prediction bands (alphas)
-#' pred <- forecast(fit_auto, h=5, level = c(80, 95))
-#'
-#' # 7. Native integration with 'forecast' ecosystem
-#' autoplot(pred)    
-#' accuracy(pred)
-fit_modal_arima <- function(y, order = c(1, 0, 0), dist = c("normal", "t", "laplace")) {
+#' # Seasonal: the airline model for monthly air passengers
+#' fit_air <- fit_modal_arima(log(AirPassengers), order = c(0, 1, 1),
+#'                            seasonal = list(order = c(0, 1, 1), period = 12))
+#' summary(fit_air)
+#' fc <- forecast(fit_air, h = 24)
+#' autoplot(fc)
+fit_modal_arima <- function(y, order = c(1, 0, 0),
+                            seasonal = list(order = c(0, 0, 0), period = NA),
+                            dist = c("normal", "t", "laplace")) {
   dist <- match.arg(dist)
   if (length(order) != 3) stop("'order' must have length 3 (p, d, q)")
+  if (any(order < 0)) stop("'order' must be non-negative")
   if (anyNA(y)) stop("Missing values (NAs) are not currently supported in ModalForecast.")
+  order <- as.integer(order)
+  seasonal <- .parse_seasonal(seasonal, y)
+  spec <- .make_spec(order, seasonal, dist)
 
-  p <- order[1]
-  d <- order[2]
-  q <- order[3]
+  w <- .difference(y, spec$d, spec$D, spec$s)
+  n <- length(w)
+  n_coef <- 1 + spec$p + spec$q + spec$P + spec$Q + 2 + (dist == "t")
+  if (n <= n_coef + 1) stop("Not enough observations after differencing to fit this model.")
 
-  y_orig <- y
-  if (d > 0) {
-    y <- diff(y, differences = d)
-  }
+  fn <- function(par) .neg_loglik(par, spec, w)
+  gr <- function(par) .grad_neg_loglik(par, spec, w)
+  opt <- .mle(w, spec, .initial_values(w, spec))
+  info <- .information(opt$par, spec, w, fn, gr)
+  hess <- info$matrix
 
-  n <- length(y)
+  pp <- .split_par(opt$par, spec)
+  coefficients <- c(opt$par[seq_len(1 + spec$p + spec$q + spec$P + spec$Q)],
+                    pp$sigma, pp$gamma, pp$nu)
+  names(coefficients) <- .coef_names(spec)
 
-  # ==== Helper: ARIMA recursion (shared) ====
-  arima_recursion <- function(params, p, q, n, y) {
-    c_mu <- params[1]
-    phi <- if (p > 0) params[2:(p+1)] else numeric(0)
-    theta <- if (q > 0) params[(p+2):(1+p+q)] else numeric(0)
+  # Delta method: the optimizer works with log(sigma), log(gamma) and log(nu - 2).
+  jac <- rep(1, length(coefficients))
+  jac[names(coefficients) == "sigma"] <- pp$sigma
+  jac[names(coefficients) == "gamma"] <- pp$gamma
+  if (dist == "t") jac[names(coefficients) == "nu"] <- pp$nu - 2
+  # A parameter on the boundary (nu at its upper limit) has no information;
+  # invert the block of the remaining parameters.
+  free <- abs(diag(hess)) > 1e-8
+  vcov <- matrix(NA_real_, length(jac), length(jac))
+  vcov[free, free] <- tryCatch(solve(hess[free, free, drop = FALSE]),
+                               error = function(e) matrix(NA_real_, sum(free), sum(free)))
+  vcov <- vcov * outer(jac, jac)
+  dimnames(vcov) <- list(names(coefficients), names(coefficients))
 
-    if (p > 0) {
-      ar_roots <- polyroot(c(1, -phi))
-      if (any(abs(ar_roots) <= 1.001)) return(NULL)
-    }
-    if (q > 0) {
-      ma_roots <- polyroot(c(1, theta))
-      if (any(abs(ma_roots) <= 1.001)) return(NULL)
-    }
-
-    mu_t <- numeric(n)
-    eps <- numeric(n)
-    mean_y <- mean(y)
-
-    for (t in 1:n) {
-      ar_term <- 0
-      for (i in seq_len(p)) {
-        if (t - i > 0) ar_term <- ar_term + phi[i] * y[t - i]
-        else ar_term <- ar_term + phi[i] * mean_y
-      }
-      ma_term <- 0
-      for (j in seq_len(q)) {
-        if (t - j > 0) ma_term <- ma_term + theta[j] * eps[t - j]
-      }
-      mu_t[t] <- c_mu + ar_term + ma_term
-      eps[t] <- y[t] - mu_t[t]
-    }
-    return(list(mu_t = mu_t, eps = eps, phi = phi, theta = theta))
-  }
-
-  # ========================================================================
-  # NORMAL (Skew-Normal) log-likelihood
-  # ========================================================================
-  neg_log_lik_normal <- function(params) {
-    log_sigma <- params[length(params) - 1]
-    log_gamma <- params[length(params)]
-    sigma <- exp(log_sigma)
-    gamma <- exp(log_gamma)
-
-    rec <- arima_recursion(params, p, q, n, y)
-    if (is.null(rec)) return(1e10)
-
-    z <- (y - rec$mu_t) / sigma
-    log_f0 <- function(val) -0.5 * log(2 * pi) - 0.5 * val^2
-
-    idx_ge <- which(y >= rec$mu_t)
-    idx_lt <- which(y < rec$mu_t)
-
-    log_lik <- numeric(n)
-    if (length(idx_ge) > 0) log_lik[idx_ge] <- log(2) - log_sigma - log(gamma + 1/gamma) + log_f0(z[idx_ge] / gamma)
-    if (length(idx_lt) > 0) log_lik[idx_lt] <- log(2) - log_sigma - log(gamma + 1/gamma) + log_f0(z[idx_lt] * gamma)
-
-    ans <- -sum(log_lik)
-    if (is.na(ans) || is.infinite(ans)) ans <- 1e10
-    return(ans)
-  }
-
-  grad_normal <- function(params) {
-    log_sigma <- params[length(params) - 1]
-    log_gamma <- params[length(params)]
-    sigma <- exp(log_sigma)
-    gamma <- exp(log_gamma)
-    num_beta <- 1 + p + q
-    G <- numeric(length(params))
-    mu_t <- numeric(n); eps <- numeric(n); mean_y <- mean(y)
-    V <- matrix(0, nrow = n, ncol = num_beta)
-    phi <- if (p > 0) params[2:(p+1)] else numeric(0)
-    theta <- if (q > 0) params[(p+2):(1+p+q)] else numeric(0)
-
-    for (t in 1:n) {
-      ar_term <- 0
-      if (p > 0) for (i in seq_len(p)) {
-        if (t-i > 0) ar_term <- ar_term + phi[i]*y[t-i]
-        else ar_term <- ar_term + phi[i]*mean_y
-      }
-      ma_term <- 0
-      if (q > 0) for (j in seq_len(q)) {
-        if (t-j > 0) ma_term <- ma_term + theta[j]*eps[t-j]
-      }
-      mu_t[t] <- params[1] + ar_term + ma_term
-      eps[t] <- y[t] - mu_t[t]
-
-      Z_t <- numeric(num_beta); Z_t[1] <- 1
-      if (p > 0) for (i in 1:p) Z_t[1+i] <- if (t-i > 0) y[t-i] else mean_y
-      if (q > 0) for (j in 1:q) Z_t[1+p+j] <- if (t-j > 0) eps[t-j] else 0
-      V_ma <- numeric(num_beta)
-      if (q > 0) for (j in 1:q) if (t-j > 0) V_ma <- V_ma + theta[j]*V[t-j,]
-      V[t,] <- Z_t - V_ma
-
-      e_t <- eps[t]
-      if (e_t >= 0) {
-        W_t <- 1/(sigma^2*gamma^2); d_log_gamma <- -(gamma^2-1)/(gamma^2+1) + W_t*e_t^2
-      } else {
-        W_t <- gamma^2/sigma^2; d_log_gamma <- -(gamma^2-1)/(gamma^2+1) - W_t*e_t^2
-      }
-      G[1:num_beta] <- G[1:num_beta] - W_t*e_t*V[t,]
-      G[length(params)-1] <- G[length(params)-1] + (1 - W_t*e_t^2)
-      G[length(params)] <- G[length(params)] - d_log_gamma
-    }
-    return(G)
-  }
-
-  # ========================================================================
-  # T (Skewed Student-t) log-likelihood
-  # ========================================================================
-  neg_log_lik_t <- function(params) {
-    log_sigma <- params[length(params) - 2]
-    log_gamma <- params[length(params) - 1]
-    log_nu    <- params[length(params)]
-    sigma <- exp(log_sigma); gamma <- exp(log_gamma)
-    nu <- min(exp(log_nu), 200) + 2
-
-    rec <- arima_recursion(params, p, q, n, y)
-    if (is.null(rec)) return(1e10)
-
-    p_skew <- 1 / (gamma^2 + 1)
-    z <- (y - rec$mu_t) / sigma
-    rho <- z * (p_skew - (z < 0))
-
-    log_lik <- lgamma((nu+1)/2) - lgamma(nu/2) - log(sigma) - 0.5*log(pi*nu) +
-      log(4*p_skew*(1-p_skew)) - ((nu+1)/2)*log(4*rho^2/nu + 1)
-
-    ans <- -sum(log_lik)
-    if (is.na(ans) || is.infinite(ans)) ans <- 1e10
-    return(ans)
-  }
-
-  grad_t <- function(params) {
-    log_sigma <- params[length(params)-2]
-    log_gamma <- params[length(params)-1]
-    log_nu    <- params[length(params)]
-    sigma <- exp(log_sigma); gamma <- exp(log_gamma)
-    nu <- min(exp(log_nu), 200) + 2
-    num_beta <- 1+p+q; G <- numeric(length(params))
-    mu_t <- numeric(n); eps <- numeric(n); mean_y <- mean(y)
-    V <- matrix(0, nrow=n, ncol=num_beta)
-    phi <- if (p>0) params[2:(p+1)] else numeric(0)
-    theta <- if (q>0) params[(p+2):(1+p+q)] else numeric(0)
-    p_skew <- 1/(gamma^2+1)
-
-    for (t in 1:n) {
-      ar_term <- 0
-      if (p>0) for (i in seq_len(p)) {
-        if (t-i>0) ar_term <- ar_term+phi[i]*y[t-i] else ar_term <- ar_term+phi[i]*mean_y
-      }
-      ma_term <- 0
-      if (q>0) for (j in seq_len(q)) if (t-j>0) ma_term <- ma_term+theta[j]*eps[t-j]
-      mu_t[t] <- params[1]+ar_term+ma_term; eps[t] <- y[t]-mu_t[t]
-
-      Z_t <- numeric(num_beta); Z_t[1] <- 1
-      if (p>0) for (i in 1:p) Z_t[1+i] <- if (t-i>0) y[t-i] else mean_y
-      if (q>0) for (j in 1:q) Z_t[1+p+j] <- if (t-j>0) eps[t-j] else 0
-      V_ma <- numeric(num_beta)
-      if (q>0) for (j in 1:q) if (t-j>0) V_ma <- V_ma+theta[j]*V[t-j,]
-      V[t,] <- Z_t-V_ma
-
-      e_t <- eps[t]; z_t <- e_t/sigma
-      xi_t <- if (e_t>=0) p_skew else (1-p_skew)
-      rho_t <- z_t*(p_skew-(z_t<0)); denom <- nu+4*rho_t^2
-      w_t <- (nu+1)/denom
-
-      if (e_t>=0) dmu <- -w_t*8*p_skew^2*z_t/(sigma*nu)
-      else dmu <- -w_t*8*(1-p_skew)^2*z_t/(sigma*nu)
-      G[1:num_beta] <- G[1:num_beta]+dmu*V[t,]
-      G[length(params)-2] <- G[length(params)-2]+(1-w_t*8*xi_t^2*z_t^2/nu)
-
-      dp_dg <- -2*gamma/(gamma^2+1)^2
-      d_log_p <- dp_dg/p_skew+(-dp_dg)/(1-p_skew)
-      drho_dp <- z_t
-      d_kernel <- -w_t*8*rho_t*drho_dp*dp_dg/nu
-      G[length(params)-1] <- G[length(params)-1]-(d_log_p*gamma+d_kernel*gamma)
-
-      dnu <- exp(log_nu)
-      d_lgamma_1 <- 0.5*digamma((nu+1)/2)-0.5*digamma(nu/2) - 0.5/nu
-      d_kernel_nu <- -0.5*log(4*rho_t^2/nu+1)+(nu+1)*4*rho_t^2/(2*nu^2*(4*rho_t^2/nu+1))
-      G[length(params)] <- G[length(params)]-(d_lgamma_1+d_kernel_nu)*dnu
-    }
-    return(G)
-  }
-
-  # ========================================================================
-  # LAPLACE (Skewed Laplace) log-likelihood
-  # f(y|mu,sigma,p) = 2*p*(1-p)/sigma * exp(-2*rho_p((y-mu)/sigma))
-  # ========================================================================
-  neg_log_lik_laplace <- function(params) {
-    log_sigma <- params[length(params) - 1]
-    log_gamma <- params[length(params)]
-    sigma <- exp(log_sigma); gamma <- exp(log_gamma)
-
-    rec <- arima_recursion(params, p, q, n, y)
-    if (is.null(rec)) return(1e10)
-
-    p_skew <- 1 / (gamma^2 + 1)
-    z <- (y - rec$mu_t) / sigma
-    rho <- z * (p_skew - (z < 0))
-
-    log_lik <- log(2*p_skew*(1-p_skew)) - log(sigma) - 2*rho
-
-    ans <- -sum(log_lik)
-    if (is.na(ans) || is.infinite(ans)) ans <- 1e10
-    return(ans)
-  }
-
-  grad_laplace <- function(params) {
-    log_sigma <- params[length(params)-1]
-    log_gamma <- params[length(params)]
-    sigma <- exp(log_sigma); gamma <- exp(log_gamma)
-    num_beta <- 1+p+q; G <- numeric(length(params))
-    mu_t <- numeric(n); eps <- numeric(n); mean_y <- mean(y)
-    V <- matrix(0, nrow=n, ncol=num_beta)
-    phi <- if (p>0) params[2:(p+1)] else numeric(0)
-    theta <- if (q>0) params[(p+2):(1+p+q)] else numeric(0)
-    p_skew <- 1/(gamma^2+1)
-
-    for (t in 1:n) {
-      ar_term <- 0
-      if (p>0) for (i in seq_len(p)) {
-        if (t-i>0) ar_term <- ar_term+phi[i]*y[t-i] else ar_term <- ar_term+phi[i]*mean_y
-      }
-      ma_term <- 0
-      if (q>0) for (j in seq_len(q)) if (t-j>0) ma_term <- ma_term+theta[j]*eps[t-j]
-      mu_t[t] <- params[1]+ar_term+ma_term; eps[t] <- y[t]-mu_t[t]
-
-      Z_t <- numeric(num_beta); Z_t[1] <- 1
-      if (p>0) for (i in 1:p) Z_t[1+i] <- if (t-i>0) y[t-i] else mean_y
-      if (q>0) for (j in 1:q) Z_t[1+p+j] <- if (t-j>0) eps[t-j] else 0
-      V_ma <- numeric(num_beta)
-      if (q>0) for (j in 1:q) if (t-j>0) V_ma <- V_ma+theta[j]*V[t-j,]
-      V[t,] <- Z_t-V_ma
-
-      e_t <- eps[t]; z_t <- e_t/sigma
-      # d/d_mu of -2*rho_p(z) where rho_p(z) = z*(p - I(z<0))
-      # d(rho)/d(mu) = -(1/sigma)*(p - I(z<0))
-      sign_contrib <- if (e_t >= 0) p_skew else -(1-p_skew)
-      # grad w.r.t. beta: increases neg_log_lik
-      G[1:num_beta] <- G[1:num_beta] - (2/sigma)*sign_contrib*V[t,]
-
-      # grad w.r.t. log_sigma: d/d_log_sigma = 1 - 2*|rho_p(z)| (chain rule)
-      rho_t <- z_t*(p_skew-(z_t<0))
-      G[length(params)-1] <- G[length(params)-1] + (1 - 2*rho_t)
-
-      # grad w.r.t. log_gamma
-      dp_dg <- -2*gamma/(gamma^2+1)^2
-      d_log_p <- dp_dg/p_skew + (-dp_dg)/(1-p_skew)
-      drho_dp <- z_t
-      G[length(params)] <- G[length(params)] - (d_log_p + 2*drho_dp*dp_dg)*gamma
-    }
-    return(G)
-  }
-
-  # ========================================================================
-  # Initial values based on standard ARIMA
-  # ========================================================================
-  init_fit <- suppressWarnings(stats::arima(y, order = c(p, 0, q), method = "CSS"))
-  init_c <- if ("intercept" %in% names(init_fit$coef)) init_fit$coef["intercept"] else 0
-  init_phi <- if (p > 0) init_fit$coef[paste0("ar", 1:p)] else numeric(0)
-  init_theta <- if (q > 0) init_fit$coef[paste0("ma", 1:q)] else numeric(0)
-  init_sigma <- sqrt(init_fit$sigma2)
-  if (init_sigma < 1e-4) init_sigma <- 1
-
-  if (dist == "normal") {
-    init_params <- c(init_c, init_phi, init_theta, log(init_sigma), 0)
-    opt <- optim(par = init_params, fn = neg_log_lik_normal, gr = grad_normal,
-                 method = "BFGS", hessian = TRUE)
-    est_sigma <- exp(opt$par[length(opt$par)-1])
-    est_gamma <- exp(opt$par[length(opt$par)])
-    coef_names <- c("intercept")
-    if (p > 0) coef_names <- c(coef_names, paste0("ar", 1:p))
-    if (q > 0) coef_names <- c(coef_names, paste0("ma", 1:q))
-    coef_names <- c(coef_names, "sigma", "gamma")
-    coefficients <- c(opt$par[1],
-                      if (p>0) opt$par[2:(p+1)] else NULL,
-                      if (q>0) opt$par[(p+2):(1+p+q)] else NULL,
-                      est_sigma, est_gamma)
-    names(coefficients) <- coef_names
-
-  } else if (dist == "t") {
-    init_params <- c(init_c, init_phi, init_theta, log(init_sigma), 0, log(3))
-    opt <- optim(par = init_params, fn = neg_log_lik_t, gr = grad_t,
-                 method = "BFGS", hessian = TRUE)
-    est_sigma <- exp(opt$par[length(opt$par)-2])
-    est_gamma <- exp(opt$par[length(opt$par)-1])
-    est_nu    <- min(exp(opt$par[length(opt$par)]), 200) + 2
-    coef_names <- c("intercept")
-    if (p > 0) coef_names <- c(coef_names, paste0("ar", 1:p))
-    if (q > 0) coef_names <- c(coef_names, paste0("ma", 1:q))
-    coef_names <- c(coef_names, "sigma", "gamma", "nu")
-    coefficients <- c(opt$par[1],
-                      if (p>0) opt$par[2:(p+1)] else NULL,
-                      if (q>0) opt$par[(p+2):(1+p+q)] else NULL,
-                      est_sigma, est_gamma, est_nu)
-    names(coefficients) <- coef_names
-
-  } else if (dist == "laplace") {
-    init_params <- c(init_c, init_phi, init_theta, log(init_sigma), 0)
-    opt <- optim(par = init_params, fn = neg_log_lik_laplace, gr = grad_laplace,
-                 method = "BFGS", hessian = TRUE)
-    est_sigma <- exp(opt$par[length(opt$par)-1])
-    est_gamma <- exp(opt$par[length(opt$par)])
-    coef_names <- c("intercept")
-    if (p > 0) coef_names <- c(coef_names, paste0("ar", 1:p))
-    if (q > 0) coef_names <- c(coef_names, paste0("ma", 1:q))
-    coef_names <- c(coef_names, "sigma", "gamma")
-    coefficients <- c(opt$par[1],
-                      if (p>0) opt$par[2:(p+1)] else NULL,
-                      if (q>0) opt$par[(p+2):(1+p+q)] else NULL,
-                      est_sigma, est_gamma)
-    names(coefficients) <- coef_names
-  }
-
-  rec <- arima_recursion(opt$par, p, q, n, y)
-  eps_vals <- rep(NA, length(y_orig))
-  fit_vals <- rep(NA, length(y_orig))
-  
-  if (!is.null(rec)) {
-     if (d > 0) {
-        eps_vals[(d+1):length(y_orig)] <- rec$eps
-        fit_vals[(d+1):length(y_orig)] <- y_orig[(d+1):length(y_orig)] - rec$eps
-     } else {
-        eps_vals <- rec$eps
-        fit_vals <- rec$mu_t
-     }
-  }
-  if (stats::is.ts(y_orig)) {
-     eps_vals <- stats::ts(eps_vals, start=stats::start(y_orig), frequency=stats::frequency(y_orig))
-     fit_vals <- stats::ts(fit_vals, start=stats::start(y_orig), frequency=stats::frequency(y_orig))
+  rec <- .recursion(pp, spec, w)
+  n_lost <- length(y) - n
+  eps_vals <- c(rep(NA, n_lost), rec$eps)
+  fit_vals <- c(rep(NA, n_lost), as.numeric(y)[n_lost + seq_len(n)] - rec$eps)
+  if (stats::is.ts(y)) {
+    eps_vals <- stats::ts(eps_vals, start = stats::start(y), frequency = stats::frequency(y))
+    fit_vals <- stats::ts(fit_vals, start = stats::start(y), frequency = stats::frequency(y))
   }
 
   out <- list(
-    y = y_orig,
+    y = y,
     order = order,
+    seasonal = seasonal,
     coefficients = coefficients,
+    vcov = vcov,
     loglik = -opt$value,
-    hessian = opt$hessian,
+    nobs = n,
+    hessian = hess,
+    information = info$type,
     convergence = opt$convergence,
     dist = dist,
     fitted.values = fit_vals,
     residuals = eps_vals
   )
   class(out) <- "modal_arima"
-  return(out)
+  out
+}
+
+# Maximize the log-likelihood of the differenced series w from 'init': BFGS with
+# analytical gradients, refined by Nelder-Mead for the non-smooth Laplace case.
+.mle <- function(w, spec, init, reltol = 1e-12) {
+  fn <- function(par) .neg_loglik(par, spec, w)
+  gr <- function(par) .grad_neg_loglik(par, spec, w)
+  opt <- stats::optim(init, fn, gr, method = "BFGS", control = list(maxit = 1000))
+  if (spec$dist == "laplace") {
+    nm <- stats::optim(opt$par, fn, method = "Nelder-Mead",
+                       control = list(maxit = 20000, reltol = reltol))
+    if (nm$value < opt$value) opt <- nm
+  }
+  opt
+}
+
+# Starting values from a conditional-sum-of-squares Gaussian (S)ARIMA fit of w.
+.initial_values <- function(w, spec) {
+  seas <- if (spec$P + spec$Q > 0) list(order = c(spec$P, 0, spec$Q), period = spec$s)
+          else list(order = c(0, 0, 0))
+  init_fit <- tryCatch(
+    suppressWarnings(stats::arima(w, order = c(spec$p, 0, spec$q), seasonal = seas, method = "CSS")),
+    error = function(e) NULL)
+  get <- function(prefix, k) {
+    if (k == 0) return(numeric(0))
+    v <- if (!is.null(init_fit)) init_fit$coef[paste0(prefix, seq_len(k))] else rep(0, k)
+    v[!is.finite(v)] <- 0
+    as.numeric(v)
+  }
+  phi <- get("ar", spec$p); theta <- get("ma", spec$q)
+  Phi <- get("sar", spec$P); Theta <- get("sma", spec$Q)
+  pp <- list(phi = phi, theta = theta, Phi = Phi, Theta = Theta)
+  if (!.admissible(pp)) {
+    phi[] <- 0; theta[] <- 0; Phi[] <- 0; Theta[] <- 0
+    pp <- list(phi = phi, theta = theta, Phi = Phi, Theta = Theta)
+  }
+  # arima() reports the mean; the model constant is c = mean * phi(1) * Phi(1).
+  mean_w <- if (!is.null(init_fit) && "intercept" %in% names(init_fit$coef))
+    init_fit$coef[["intercept"]] else mean(w)
+  c0 <- mean_w * sum(.lag_polys(pp, spec)$ar)
+  sigma0 <- if (!is.null(init_fit)) sqrt(init_fit$sigma2) else stats::sd(w)
+  if (!is.finite(sigma0) || sigma0 < 1e-8) sigma0 <- 1
+  par <- c(c0, phi, theta, Phi, Theta, log(sigma0), 0)
+  if (spec$dist == "t") par <- c(par, log(3))
+  unname(par)
 }

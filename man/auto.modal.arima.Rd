@@ -2,15 +2,21 @@
 % Please edit documentation in R/auto_modal_arima.R
 \name{auto.modal.arima}
 \alias{auto.modal.arima}
-\title{Automatic selection of Parametric Modal ARIMA model}
+\title{Automatic selection of Parametric Modal ARIMA and SARIMA models}
 \usage{
 auto.modal.arima(
   y,
   d = NA,
+  D = NA,
   max.p = 5,
   max.q = 5,
+  max.P = 1,
+  max.Q = 1,
+  seasonal = TRUE,
+  period = stats::frequency(y),
   ic = c("aic", "bic"),
-  dist = c("normal", "t", "laplace")
+  dist = c("normal", "t", "laplace"),
+  trace = FALSE
 )
 }
 \arguments{
@@ -18,25 +24,44 @@ auto.modal.arima(
 
 \item{d}{Integer, degree of differencing. If NA, it's determined automatically.}
 
+\item{D}{Integer, degree of seasonal differencing. If NA, it's determined
+automatically. Ignored for non-seasonal models.}
+
 \item{max.p}{Maximum AR order}
 
 \item{max.q}{Maximum MA order}
+
+\item{max.P}{Maximum seasonal AR order}
+
+\item{max.Q}{Maximum seasonal MA order}
+
+\item{seasonal}{Logical. If \code{TRUE} (default) and the seasonal period is
+greater than one, seasonal models are considered.}
+
+\item{period}{Seasonal period. Defaults to \code{frequency(y)}.}
 
 \item{ic}{Information criterion to be used in model selection ("aic", "bic")}
 
 \item{dist}{Character string specifying the error distribution.
 \code{"normal"} (default) for Skew-Normal, \code{"t"} for Skewed Student-t,
 \code{"laplace"} for Skewed Laplace.}
+
+\item{trace}{Logical. If \code{TRUE}, prints each model and its criterion.}
 }
 \value{
 An object of class \code{modal_arima}.
 }
 \description{
-Automatic selection of Parametric Modal ARIMA model
+Automatic selection of Parametric Modal ARIMA and SARIMA models
 }
 \details{
-This function performs a grid search over AR and MA orders to find the
-optimal Modal ARIMA model based on the selected information criterion (AIC or BIC).
+This function performs a grid search over AR and MA orders, and over
+seasonal AR and MA orders when the series is seasonal, to find the Modal
+(S)ARIMA model with the smallest information criterion (AIC or BIC). As in
+\code{forecast::auto.arima}, the seasonal differencing order \code{D} is
+chosen with \code{forecast::nsdiffs} and then the regular order \code{d} with
+\code{forecast::ndiffs} on the seasonally differenced series, unless they are
+supplied.
 }
 \note{
 GitHub repository: \url{https://github.com/chedgala/ModalForecast}
@@ -44,32 +69,14 @@ GitHub repository: \url{https://github.com/chedgala/ModalForecast}
 \examples{
 library(forecast)
 
-# 1. Load Empirical Data (Lynx)
-data(lynx)
-y <- log10(lynx)
-
-# 2. Find the best SKD Error Distribution (Normal vs T vs Laplace) 
-fit_n <- fit_modal_arima(y, order = c(2, 0, 0), dist = "normal")
-fit_t <- fit_modal_arima(y, order = c(2, 0, 0), dist = "t")
-fit_l <- fit_modal_arima(y, order = c(2, 0, 0), dist = "laplace")
-c(Normal = AIC(fit_n), Student = AIC(fit_t), Laplace = AIC(fit_l))
-
-# 3. Auto Model Selection globally on the winning distribution (Skew-Normal)
-fit_auto <- auto.modal.arima(y, d=0, max.p=2, max.q=2, dist="normal")
-
-# 4. Summary & Inferences
+# Non-seasonal
+fit_auto <- auto.modal.arima(log10(lynx), d = 0, max.p = 2, max.q = 2)
 summary(fit_auto)
 
-# 5. Run residual diagnostics and Envelopes
-diagnostics(fit_auto)
-envelope(fit_auto, B=10)
-
-# 6. Produce forecasts with multiple prediction bands (alphas)
-pred <- forecast(fit_auto, h=5, level = c(80, 95))
-
-# 7. Native integration with 'forecast' ecosystem
-autoplot(pred)    
-accuracy(pred)
+# Seasonal, with a small search grid
+fit_sauto <- auto.modal.arima(log(AirPassengers), max.p = 1, max.q = 1,
+                              max.P = 1, max.Q = 1)
+fit_sauto
 }
 \references{
 Galarza, C. E., Lachos, V. H., Cabral, C. R. B., and Castro, L. M. (2017).

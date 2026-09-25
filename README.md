@@ -1,9 +1,10 @@
 # ModalForecast
 
 <!-- badges: start -->
+[![CRAN status](https://www.r-pkg.org/badges/version/ModalForecast)](https://CRAN.R-project.org/package=ModalForecast)
 <!-- badges: end -->
 
-The `ModalForecast` package implements parametric modal ARIMA models utilizing the Skewed Distribution (SKD) family. Instead of connecting the expected value (mean) to covariates, the model connects the **conditional mode** to the systematic autoregressive integrated moving average (ARIMA) components. 
+The `ModalForecast` package implements parametric modal ARIMA and seasonal ARIMA (SARIMA) models utilizing the Skewed Distribution (SKD) family. Instead of connecting the expected value (mean) to covariates, the model connects the **conditional mode** to the systematic autoregressive integrated moving average components, with or without multiplicative seasonal terms.
 
 By modeling the mode directly, this framework helps mitigate the effects of localized extremes, asymmetry, and non-normal behavior, providing robust centralized predictions under asymmetric error distributions.
 
@@ -33,9 +34,28 @@ The parameter vector $\boldsymbol{\Theta} = (c, \boldsymbol{\phi}, \boldsymbol{\
 $$ \ell(\boldsymbol{\Theta}) = \sum_{t=1}^n \log f(y_t | \mu_t, \sigma, \gamma, \boldsymbol{\nu}) $$
 
 where $f(\cdot)$ is the probability density function of the chosen SKD distribution (e.g., Skew-Normal, Skewed Student-t, Skewed Laplace), and $\mu_t$ embeds the recursive ARIMA structure.
+
+### Seasonal Component: Modal SARIMA
+
+For seasonal series with period $s$, let $w_t = (1-B)^d(1-B^s)^D y_t$. The Modal SARIMA$(p,d,q)	imes(P,D,Q)_s$ model is
+
+$$\phi(B)\,\Phi(B^s)\,w_t = c + 	heta(B)\,\Theta(B^s)\,\epsilon_t, \qquad \epsilon_t \sim 	ext{SKD}(0, \sigma, \gamma, oldsymbol{
+u}),$$
+
+so the conditional mode of $w_t$ is $\mu_t = w_t - \epsilon_t$. It is fitted with the `seasonal` argument, which has the same form as in `stats::arima()`.
+
+### Modal Forecasts: Joint Trajectory and Marginal Mode
+
+Because the mode is not linear, `forecast()` offers two modal point forecasts. The default, `point = "joint"`, is the most probable future **trajectory**, obtained by setting future innovations to their mode, zero. `point = "marginal"` gives the most probable **value** at each horizon. Both coincide at one step ahead and for symmetric errors; with skewed errors and integrated series they can differ substantially at long horizons.
 ## Installation
 
-You can install the development version of ModalForecast from GitHub with:
+Install the released version from CRAN:
+
+```r
+install.packages("ModalForecast")
+```
+
+or the development version from GitHub:
 
 ```r
 # install.packages("devtools")
@@ -66,7 +86,7 @@ Comparison between traditional Gaussian ARIMA (Mean) and the Modal ARIMA (Mode) 
 
 ## Quick Start Tutorial
 
-Below is a brief tutorial showing how to adjust a modal ARIMA model to empirical data.
+Below is a brief tutorial showing how to fit a modal ARIMA model to empirical data.
 
 ```r
 library(ModalForecast)
@@ -107,6 +127,36 @@ autoplot(pred)
 # 2. Evaluate forecast metric diagnostic functions (ME, RMSE, MAE, MAPE, etc.)
 accuracy(pred)
 ```
+
+### Seasonal models
+
+```r
+library(ModalForecast)
+library(forecast)
+
+# Airline model for the monthly air passengers
+y <- log(AirPassengers)
+fit_air <- fit_modal_arima(y, order = c(0, 1, 1),
+                           seasonal = list(order = c(0, 1, 1), period = 12),
+                           dist = "normal")
+summary(fit_air)
+
+# Residual diagnostics and envelopes work as for non-seasonal models
+diagnostics(fit_air)
+envelope(fit_air, B = 100)
+
+# Most probable trajectory and most probable value at each horizon
+fc_joint <- forecast(fit_air, h = 36)
+fc_marg  <- forecast(fit_air, h = 36, point = "marginal")
+autoplot(fc_joint) + autolayer(fc_marg$mean, series = "Marginal mode")
+
+# Automatic selection, including seasonal orders
+fit_auto <- auto.modal.arima(y, max.p = 2, max.q = 2, max.P = 1, max.Q = 1)
+```
+
+<p align="center">
+  <img src="man/figures/air_forecast.png" width="80%">
+</p>
 
 The fitted object returns standard coefficients, scale `sigma`, and skewness `gamma`. If `gamma` is significantly different from 1, it indicates positive asymmetry (right-skewness if $>1$) or negative asymmetry ($<1$), capturing patterns that typical least-squares ARIMA would miss. If the specified distribution possesses additional tail parameters (like `nu` for Skewed Student-t), they are estimated automatically.
 

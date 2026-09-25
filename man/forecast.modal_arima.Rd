@@ -2,7 +2,7 @@
 % Please edit documentation in R/predict.R
 \name{forecast.modal_arima}
 \alias{forecast.modal_arima}
-\title{Forecast methodology for Modal ARIMA}
+\title{Forecasting with Modal (S)ARIMA Models}
 \usage{
 \method{forecast}{modal_arima}(
   object,
@@ -10,6 +10,7 @@
   level = c(80, 95),
   interval = c("asymptotic", "bootstrap"),
   npaths = 1000,
+  point = c("joint", "marginal"),
   ...
 )
 }
@@ -24,41 +25,51 @@
 
 \item{npaths}{Number of simulated paths for bootstrap intervals. Defaults to 1000.}
 
+\item{point}{Modal point forecast: \code{"joint"} (most probable trajectory,
+default) or \code{"marginal"} (conditional mode at each horizon).}
+
 \item{...}{Additional arguments.}
 }
 \value{
-A forecast object.
+An object of class \code{forecast}. Besides the usual components, it
+  contains \code{mode_path} (the joint modal trajectory) and \code{mode_shift}
+  (the correction \eqn{\delta_h} from the joint path to the marginal mode).
 }
 \description{
-Forecast methodology for Modal ARIMA
+Produces modal point forecasts and prediction intervals for a fitted
+\code{modal_arima} object, with or without a seasonal component.
+}
+\details{
+Because the mode is not a linear operator, two modal point forecasts are
+available. \code{point = "joint"} (the default) returns the joint modal
+trajectory: the most probable future path, obtained by iterating the model
+with future innovations set to zero. \code{point = "marginal"} returns, for
+each horizon \eqn{h}, the conditional mode of \eqn{y_{T+h}} itself. The two
+coincide at \eqn{h = 1} and for symmetric errors (\eqn{\gamma = 1}); for
+skewed errors and \eqn{h \ge 2} the marginal mode equals the joint path plus
+the mode \eqn{\delta_h} of the forecast error
+\eqn{\sum_{j=0}^{h-1}\psi_j\epsilon_{T+h-j}}, which can be substantial for
+integrated series.
+
+With \code{interval = "asymptotic"}, the prediction intervals use the exact
+distribution of the forecast error at the estimated parameters, computed by
+numerical convolution of the SKD densities. With \code{interval = "bootstrap"},
+they use empirical quantiles of \code{npaths} simulated future paths.
 }
 \examples{
 library(forecast)
 
-# 1. Load Empirical Data (Lynx)
-data(lynx)
-y <- log10(lynx)
-
-# 2. Find the best SKD Error Distribution (Normal vs T vs Laplace) 
-fit_n <- fit_modal_arima(y, order = c(2, 0, 0), dist = "normal")
-fit_t <- fit_modal_arima(y, order = c(2, 0, 0), dist = "t")
-fit_l <- fit_modal_arima(y, order = c(2, 0, 0), dist = "laplace")
-c(Normal = AIC(fit_n), Student = AIC(fit_t), Laplace = AIC(fit_l))
-
-# 3. Auto Model Selection globally on the winning distribution (Skew-Normal)
-fit_auto <- auto.modal.arima(y, d=0, max.p=2, max.q=2, dist="normal")
-
-# 4. Summary & Inferences
-summary(fit_auto)
-
-# 5. Run residual diagnostics and Envelopes
-diagnostics(fit_auto)
-envelope(fit_auto, B=10)
-
-# 6. Produce forecasts with multiple prediction bands (alphas)
-pred <- forecast(fit_auto, h=5, level = c(80, 95))
-
-# 7. Native integration with 'forecast' ecosystem
-autoplot(pred)    
+# Non-seasonal
+fit <- fit_modal_arima(log10(lynx), order = c(2, 0, 0))
+pred <- forecast(fit, h = 5, level = c(80, 95))
+autoplot(pred)
 accuracy(pred)
+
+# Seasonal airline model: joint trajectory versus marginal mode
+fit_air <- fit_modal_arima(log(AirPassengers), order = c(0, 1, 1),
+                           seasonal = list(order = c(0, 1, 1), period = 12))
+fc_joint <- forecast(fit_air, h = 24)
+fc_marg <- forecast(fit_air, h = 24, point = "marginal")
+round(cbind(joint = fc_joint$mean, marginal = fc_marg$mean)[c(1, 12, 24), ], 4)
+fc_boot <- forecast(fit_air, h = 12, interval = "bootstrap", npaths = 200)
 }

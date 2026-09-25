@@ -1,20 +1,29 @@
 Package: ModalForecast
-Title: Parametric Modal ARIMA Models using the SKD Family
-Version: 0.1.0
-Authors@R: person("Christian", "Galarza", email = "chedgala@espol.edu.ec", role = c("aut", "cre"))
-Description: Implements parametric modal Autoregressive Integrated Moving Average (ARIMA) models utilizing the Skewed Distribution (SKD) family. Current distributions supported are the Skew-Normal, Skewed Student-t, and Skewed Laplace. The conditional mode is parameterized and optimized via maximum likelihood using analytical gradients. Includes comprehensive residual diagnostics, robustness options (heavy tails, asymmetry), robust parametric bootstrap prediction intervals, and classical asymptotic inference via the Fisher Information matrix. Methods are described in Galarza, C.E., Lachos, V.H., Cabral, C.R.B., & Castro, L.M. (2017) <doi:10.1002/sta4.140>.
+Title: Parametric Modal ARIMA and Seasonal ARIMA Models using the SKD
+        Family
+Version: 0.2.0
+Authors@R: c(
+    person("Christian", "Galarza", email = "chedgala@espol.edu.ec", role = c("aut", "cre")),
+    person("Sergio Luis", "Mercado Londoño", email = "luis.mercado@udea.edu.co", role = "ctb"),
+    person("Víctor Hugo", "Lachos", email = "hlachos@uconn.edu", role = "ctb",
+           comment = c(ORCID = "0000-0002-7239-2459")))
+Description: Implements parametric modal Autoregressive Integrated Moving Average (ARIMA) and seasonal ARIMA (SARIMA) models utilizing the Skewed Distribution (SKD) family, in which the conditional mode, rather than the conditional mean, follows the (seasonal) ARIMA recursion. Current distributions supported are the Skew-Normal, Skewed Student-t, and Skewed Laplace. The parameters are estimated by maximum likelihood using analytical gradients. Includes residual diagnostics, simulation envelopes, automatic order selection, joint and marginal modal forecasts, exact and parametric bootstrap prediction intervals, and classical asymptotic inference via the Fisher Information matrix. Methods are described in Galarza, C.E., Lachos, V.H., Cabral, C.R.B., & Castro, L.M. (2017) <doi:10.1002/sta4.140>.
 URL: https://github.com/chedgala/ModalForecast
 BugReports: https://github.com/chedgala/ModalForecast/issues
 Depends: R (>= 3.5.0)
 License: GPL-3
 Encoding: UTF-8
 RoxygenNote: 7.3.3
-Imports: stats, graphics, forecast, ggplot2, gridExtra, scales, grid
+Imports: stats, utils, graphics, forecast, ggplot2, gridExtra, scales,
+        grid
 Suggests: rmarkdown, testthat (>= 3.0.0), knitr
 Config/testthat/edition: 3
 NeedsCompilation: no
-Packaged: 2026-05-06 15:02:39 UTC; chedgala
-Author: Christian Galarza [aut, cre]
+Packaged: 2026-09-24 22:17:00 UTC; chedgala
+Author: Christian Galarza [aut, cre],
+  Sergio Luis Mercado Londoño [ctb],
+  Víctor Hugo Lachos [ctb] (ORCID:
+    <https://orcid.org/0000-0002-7239-2459>)
 Maintainer: Christian Galarza <chedgala@espol.edu.ec>
 Repository: CRAN
-Date/Publication: 2026-05-12 17:40:07 UTC
+Date/Publication: 2026-09-25 07:10:07 UTC
